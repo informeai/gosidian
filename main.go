@@ -519,6 +519,7 @@ func renderMarkdown(text string) string {
 	italicStyle := lipgloss.NewStyle().Italic(true)
 	codeStyle := lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("223"))
 	linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Underline(true)
+	wikiLinkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true).Underline(true)
 	listStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
 
 	// Expressões regulares
@@ -529,6 +530,7 @@ func renderMarkdown(text string) string {
 	italicRe := regexp.MustCompile(`\*(.+?)\*`)
 	codeRe := regexp.MustCompile("`([^`]+)`")
 	linkRe := regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	wikiLinkRe := regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 	listRe := regexp.MustCompile(`^[-*] (.+)$`)
 	checkRe := regexp.MustCompile(`^- \[x\] (.+)$`)
 	uncheckedRe := regexp.MustCompile(`^- \[ \] (.+)$`)
@@ -544,7 +546,15 @@ func renderMarkdown(text string) string {
 		} else if match := h3Re.FindStringSubmatch(line); len(match) > 0 {
 			rendered = h3Style.Render(match[1])
 		} else {
-			// Links [[note]] ou [text](url)
+			// Wiki links [[note]]
+			matches := wikiLinkRe.FindAllStringSubmatchIndex(line, -1)
+			for _, match := range matches {
+				if len(match) == 4 {
+					linkText := line[match[2]:match[3]]
+					rendered = strings.Replace(rendered, "[["+linkText+"]]", wikiLinkStyle.Render("‣ "+linkText), 1)
+				}
+			}
+			// Links [text](url)
 			rendered = linkRe.ReplaceAllString(rendered, linkStyle.Render("$1"))
 			// Código inline
 			rendered = codeRe.ReplaceAllString(rendered, codeStyle.Render("$1"))
