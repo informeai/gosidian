@@ -8,7 +8,6 @@ Um aplicativo de notas de terminal estilo obsidian, construído com Bubble Tea.
 - Lista de notas com navegação
 - Editor de texto multi-linha
 - Linkagem de notas com `[[nome-da-nota]]`
-- Autocomplete ao digitar `[[`
 - Atalhos de teclado
 - Notas salvas em Markdown
 
@@ -42,17 +41,17 @@ gosidian
 |------|------|
 | `Ctrl+S` | Salvar nota |
 | `Ctrl+R` | Renomear nota |
-| `Ctrl+L` | Iniciar/linkar nota |
-| `Tab` / `↓` | Próxima sugestão |
-| `Shift+Tab` / `↑` | Sugestão anterior |
-| `Enter` | Inserir link selecionado |
+| `Ctrl+L` | Autocomplete de links |
 | `Esc` | Voltar para lista |
 
-### Linkagem
+### Visualização
 
-Digite `[[` e o autocomplete mostrará as notas existentes. Use `Tab`/`Enter` para selecionar.
-
-Exemplo: `[[minha-nota]]`
+| Tecla | Ação |
+|------|------|
+| `Enter` | Ir para nota linkada |
+| `Alt+←` | Voltar no histórico |
+| `Alt+→` | Avançar no histórico |
+| `e` | Editar nota |
 
 ## Armazenamento
 
