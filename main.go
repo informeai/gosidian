@@ -119,6 +119,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		// Atualiza tamanho do textarea
+		m.editor.SetWidth(msg.Width - 4)
+		m.editor.SetHeight(msg.Height - 12)
+		// Atualiza tamanho da lista de links
+		m.linkList.SetSize(msg.Width-4, 5)
 		return m, nil
 
 	case tea.KeyMsg:
