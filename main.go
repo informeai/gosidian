@@ -28,19 +28,22 @@ type Note struct {
 }
 
 type model struct {
-	notes      []Note
-	cursor     int
-	showEditor bool
-	isNewNote  bool
-	isRenaming bool
-	showLinks  bool
-	linkIndex  int
-	editor     textarea.Model
-	titleInput textinput.Model
-	linkList   list.Model
-	currentDir string
-	width      int
-	height     int
+	notes       []Note
+	cursor      int
+	showEditor  bool
+	isNewNote   bool
+	isRenaming  bool
+	isViewing   bool // Modo visualização (renderizado)
+	isEditing   bool // Modo edição
+	showLinks   bool
+	linkIndex   int
+	editor      textarea.Model
+	titleInput  textinput.Model
+	linkList    list.Model
+	currentDir  string
+	currentNote *Note
+	width       int
+	height      int
 }
 
 func initialModel() model {
@@ -142,6 +145,24 @@ func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateLinkListInput(msg)
 	}
 
+	// Se está no modo visualização, não permite editar
+	if m.isViewing && !m.isEditing {
+		keyMsg, ok := msg.(tea.KeyMsg)
+		if !ok {
+			return m, nil
+		}
+		switch keyMsg.String() {
+		case "e":
+			m.isEditing = true
+			m.editor.Focus()
+			return m, nil
+		case "ctrl+c", "esc":
+			m.showEditor = false
+			return m, nil
+		}
+		return m, nil
+	}
+
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
 		var cmd tea.Cmd
@@ -155,9 +176,16 @@ func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch keyMsg.String() {
 	case "ctrl+c", "esc":
+		m.showLinks = false
+		if m.isEditing {
+			// Se estiver editando, volta para visualização
+			m.isEditing = false
+			m.isViewing = true
+			m.isRenaming = false
+			return m, nil
+		}
 		m.showEditor = false
 		m.isRenaming = false
-		m.showLinks = false
 		return m, nil
 
 	case "ctrl+r":
@@ -184,7 +212,8 @@ func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case "ctrl+s":
 		m.saveCurrentNote()
-		m.showEditor = false
+		m.isEditing = false
+		m.isViewing = true
 		m.isRenaming = false
 		m.showLinks = false
 		return m, nil
@@ -236,7 +265,10 @@ func (m model) updateSidebar(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) openNote(note Note) {
 	m.showEditor = true
 	m.isNewNote = false
+	m.isViewing = true // Começa no modo visualização
+	m.isEditing = false
 	m.isRenaming = false
+	m.currentNote = &note
 	m.editor.SetValue(note.Body)
 	m.titleInput.SetValue(note.Title)
 }
@@ -244,9 +276,12 @@ func (m *model) openNote(note Note) {
 func (m *model) createNewNote() {
 	m.showEditor = true
 	m.isNewNote = true
+	m.isViewing = false
+	m.isEditing = true
 	m.isRenaming = true
 	m.editor.SetValue("")
 	m.titleInput.SetValue("")
+	m.currentNote = nil
 	m.cursor = len(m.notes)
 }
 
@@ -287,29 +322,25 @@ func (m model) viewSidebar() string {
 	var b strings.Builder
 
 	b.WriteString(titleStyle.Render("📁 gosidian") + "\n")
-	b.WriteString(dimStyle.Render("─────────────────") + "\n\n")
-
-	b.WriteString(normalStyle.Render("  atalhos:") + "\n")
-	b.WriteString(dimStyle.Render("    n = nova nota") + "\n")
-	b.WriteString(dimStyle.Render("    o = abrir nota") + "\n")
-	b.WriteString(dimStyle.Render("    q = sair") + "\n\n")
-
-	b.WriteString(dimStyle.Render("─────────────────") + "\n\n")
+	b.WriteString(dimStyle.Render("─────────────────") + "\n")
 
 	if len(m.notes) == 0 {
+		b.WriteString("\n")
 		b.WriteString(dimStyle.Render("  nenhuma nota ainda"))
 		b.WriteString(dimStyle.Render("\n  pressione n para criar"))
-		return b.String()
+	} else {
+		for i, note := range m.notes {
+			if m.cursor == i {
+				b.WriteString(focusedStyle.Render("▶ " + note.Title))
+			} else {
+				b.WriteString(normalStyle.Render("  " + note.Title))
+			}
+			b.WriteString("\n")
+		}
 	}
 
-	for i, note := range m.notes {
-		if m.cursor == i {
-			b.WriteString(focusedStyle.Render("▶ " + note.Title))
-		} else {
-			b.WriteString(normalStyle.Render("  " + note.Title))
-		}
-		b.WriteString("\n")
-	}
+	b.WriteString(dimStyle.Render("─────────────────") + "\n")
+	b.WriteString(dimStyle.Render("n = nova | o = abrir | q = sair"))
 
 	return b.String()
 }
@@ -317,21 +348,33 @@ func (m model) viewSidebar() string {
 func (m model) viewEditor() string {
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render("📝 Editando nota") + "\n")
-	b.WriteString(dimStyle.Render("─────────────────────────") + "\n\n")
-
-	if m.isRenaming {
-		b.WriteString(focusedStyle.Render("Nome: "))
-		b.WriteString(m.titleInput.View())
-		b.WriteString("\n\n")
+	if m.isViewing && !m.isEditing {
+		// Modo visualização (preview)
+		b.WriteString(titleStyle.Render("👁 "+m.titleInput.Value()) + "\n")
+		b.WriteString(dimStyle.Render("─────────────────────────") + "\n")
+		b.WriteString(renderMarkdown(m.editor.Value()))
+		b.WriteString("\n" + dimStyle.Render("e = editar | Esc = voltar"))
 	} else {
-		b.WriteString(dimStyle.Render("Nome: "+m.titleInput.Value()+" (Ctrl+R para alterar)") + "\n\n")
+		// Modo edição
+		b.WriteString(titleStyle.Render("📝 Editando nota") + "\n")
+		b.WriteString(dimStyle.Render("─────────────────────────") + "\n")
+
+		if m.isRenaming {
+			b.WriteString(focusedStyle.Render("Nome: "))
+			b.WriteString(m.titleInput.View())
+			b.WriteString("\n")
+		} else {
+			b.WriteString(dimStyle.Render("Nome: " + m.titleInput.Value()))
+			b.WriteString(dimStyle.Render(" (Ctrl+R)"))
+			b.WriteString("\n")
+		}
+
+		b.WriteString("\n")
+		b.WriteString(m.editor.View())
+
+		b.WriteString("\n\n")
+		b.WriteString(dimStyle.Render("Ctrl+S = salvar | Ctrl+R = renomear | Ctrl+L = link | Esc = voltar"))
 	}
-
-	b.WriteString(m.editor.View())
-
-	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("Ctrl+S = salvar | Ctrl+R = renomear | Ctrl+L = link | Esc = voltar"))
 
 	// Mostra popup de autocomplete se ativo
 	if m.showLinks {
@@ -384,7 +427,13 @@ func extractPartialLink(text string) string {
 // updateLinkList atualiza a lista de autocomplete com notas existentes
 func (m *model) updateLinkList(filter string) {
 	var items []list.Item
+	currentTitle := m.titleInput.Value()
+
 	for _, note := range m.notes {
+		// Pula a nota atual
+		if note.Title == currentTitle {
+			continue
+		}
 		if filter == "" || strings.Contains(strings.ToLower(note.Title), strings.ToLower(filter)) {
 			items = append(items, linkItem{title: note.Title})
 		}
@@ -455,6 +504,69 @@ func (m *model) insertLink(selectedTitle string) {
 	}
 	m.showLinks = false
 	m.editor.Focus()
+}
+
+// renderMarkdown faz um preview básico do markdown para o terminal
+func renderMarkdown(text string) string {
+	lines := strings.Split(text, "\n")
+	var b strings.Builder
+
+	// Estilos para markdown
+	h1Style := lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true).Underline(true)
+	h2Style := lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
+	h3Style := lipgloss.NewStyle().Foreground(lipgloss.Color("219")).Bold(true)
+	boldStyle := lipgloss.NewStyle().Bold(true)
+	italicStyle := lipgloss.NewStyle().Italic(true)
+	codeStyle := lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("223"))
+	linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Underline(true)
+	listStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
+
+	// Expressões regulares
+	h1Re := regexp.MustCompile(`^# (.+)$`)
+	h2Re := regexp.MustCompile(`^## (.+)$`)
+	h3Re := regexp.MustCompile(`^### (.+)$`)
+	boldRe := regexp.MustCompile(`\*\*(.+?)\*\*`)
+	italicRe := regexp.MustCompile(`\*(.+?)\*`)
+	codeRe := regexp.MustCompile("`([^`]+)`")
+	linkRe := regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	listRe := regexp.MustCompile(`^[-*] (.+)$`)
+	checkRe := regexp.MustCompile(`^- \[x\] (.+)$`)
+	uncheckedRe := regexp.MustCompile(`^- \[ \] (.+)$`)
+
+	for _, line := range lines {
+		rendered := line
+
+		// Cabeçalhos
+		if match := h1Re.FindStringSubmatch(line); len(match) > 0 {
+			rendered = h1Style.Render(match[1])
+		} else if match := h2Re.FindStringSubmatch(line); len(match) > 0 {
+			rendered = h2Style.Render(match[1])
+		} else if match := h3Re.FindStringSubmatch(line); len(match) > 0 {
+			rendered = h3Style.Render(match[1])
+		} else {
+			// Links [[note]] ou [text](url)
+			rendered = linkRe.ReplaceAllString(rendered, linkStyle.Render("$1"))
+			// Código inline
+			rendered = codeRe.ReplaceAllString(rendered, codeStyle.Render("$1"))
+			// Negrito
+			rendered = boldRe.ReplaceAllString(rendered, boldStyle.Render("$1"))
+			// Itálico
+			rendered = italicRe.ReplaceAllString(rendered, italicStyle.Render("$1"))
+			// Listas
+			if match := checkRe.FindStringSubmatch(line); len(match) > 0 {
+				rendered = listStyle.Render("☑ " + match[1])
+			} else if match := uncheckedRe.FindStringSubmatch(line); len(match) > 0 {
+				rendered = listStyle.Render("☐ " + match[1])
+			} else if match := listRe.FindStringSubmatch(line); len(match) > 0 {
+				rendered = listStyle.Render("• " + match[1])
+			}
+		}
+
+		b.WriteString(rendered)
+		b.WriteString("\n")
+	}
+
+	return b.String()
 }
 
 func main() {
