@@ -134,6 +134,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		//global quit - funciona em qualquer modo
+		if msg.String() == "q" {
+			return m, tea.Quit
+		}
 		if m.showEditor {
 			return m.updateEditor(msg)
 		}
@@ -198,6 +202,16 @@ func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editor, cmd = m.editor.Update(msg)
 		}
 		return m, cmd
+	}
+
+	switch keyMsg.String() {
+	case "enter":
+		if m.isRenaming && m.isNewNote {
+			// Ao pressionar Enter no campo de título de nova nota, muda para o editor
+			m.isRenaming = false
+			m.editor.Focus()
+			return m, nil
+		}
 	}
 
 	switch keyMsg.String() {
@@ -381,7 +395,7 @@ func (m model) viewEditor() string {
 		b.WriteString(titleStyle.Render("👁 "+m.titleInput.Value()) + "\n")
 		b.WriteString(dimStyle.Render("─────────────────────────") + "\n")
 		b.WriteString(renderMarkdown(m.editor.Value()))
-		b.WriteString("\n" + dimStyle.Render("e = editar | Enter = link |Alt+←/→ = histórico | Esc = voltar"))
+		b.WriteString("\n" + dimStyle.Render("e = editar | Enter = link | Alt+←/→ = histórico | q = sair"))
 	} else {
 		// Modo edição
 		b.WriteString(titleStyle.Render("📝 Editando nota") + "\n")
@@ -401,7 +415,7 @@ func (m model) viewEditor() string {
 		b.WriteString(m.editor.View())
 
 		b.WriteString("\n\n")
-		b.WriteString(dimStyle.Render("Ctrl+S = salvar | Ctrl+R = renomear | Ctrl+L = link | Esc = voltar"))
+		b.WriteString(dimStyle.Render("Ctrl+S = salvar | Ctrl+R = renomear | Ctrl+L = link | q = sair"))
 	}
 
 	// Mostra popup de autocomplete se ativo
