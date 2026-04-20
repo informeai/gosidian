@@ -239,9 +239,9 @@ func (m model) updateSidebar(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "enter", "o":
-		if m.cursor < len(m.notes) {
+		if m.cursor < len(m.notes) && len(m.notes) > 0 {
 			m.openNote(m.notes[m.cursor])
-		} else {
+		} else if len(m.notes) == 0 {
 			m.createNewNote()
 		}
 
@@ -254,7 +254,7 @@ func (m model) updateSidebar(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case "down", "j":
-		if m.cursor < len(m.notes) {
+		if m.cursor < len(m.notes)-1 {
 			m.cursor++
 		}
 	}
