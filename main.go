@@ -42,8 +42,12 @@ type model struct {
 	linkList    list.Model
 	currentDir  string
 	currentNote *Note
-	width       int
-	height      int
+
+	// Histórico de navegação
+	history    []string //lista de títulos visitados
+	historyPos int      // posição atual no histórico
+	width      int
+	height     int
 }
 
 func initialModel() model {
@@ -152,10 +156,32 @@ func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch keyMsg.String() {
+		case "enter":
+			// Navega para nota linkada
+			links := extractLinks(m.editor.Value())
+			if len(links) > 0 {
+				if note := m.findNoteByTitle(links[0]); note != nil {
+					m.openNote(*note)
+					return m, nil
+				}
+			}
+			return m, nil
+
 		case "e":
 			m.isEditing = true
 			m.editor.Focus()
 			return m, nil
+
+		case "alt+left":
+			// Volta no histórico
+			m.goBack()
+			return m, nil
+
+		case "alt+right":
+			// Avança no histórico
+			m.goForward()
+			return m, nil
+
 		case "ctrl+c", "esc":
 			m.showEditor = false
 			return m, nil
@@ -271,6 +297,8 @@ func (m *model) openNote(note Note) {
 	m.currentNote = &note
 	m.editor.SetValue(note.Body)
 	m.titleInput.SetValue(note.Title)
+	// Adiciona ao histórico
+	m.pushHistory(note.Title)
 }
 
 func (m *model) createNewNote() {
@@ -353,7 +381,7 @@ func (m model) viewEditor() string {
 		b.WriteString(titleStyle.Render("👁 "+m.titleInput.Value()) + "\n")
 		b.WriteString(dimStyle.Render("─────────────────────────") + "\n")
 		b.WriteString(renderMarkdown(m.editor.Value()))
-		b.WriteString("\n" + dimStyle.Render("e = editar | Esc = voltar"))
+		b.WriteString("\n" + dimStyle.Render("e = editar | Enter = link |Alt+←/→ = histórico | Esc = voltar"))
 	} else {
 		// Modo edição
 		b.WriteString(titleStyle.Render("📝 Editando nota") + "\n")
@@ -547,11 +575,13 @@ func renderMarkdown(text string) string {
 			rendered = h3Style.Render(match[1])
 		} else {
 			// Wiki links [[note]]
-			matches := wikiLinkRe.FindAllStringSubmatchIndex(line, -1)
-			for _, match := range matches {
-				if len(match) == 4 {
-					linkText := line[match[2]:match[3]]
-					rendered = strings.Replace(rendered, "[["+linkText+"]]", wikiLinkStyle.Render("‣ "+linkText), 1)
+			if len(line) > 0 {
+				matches := wikiLinkRe.FindAllStringSubmatchIndex(line, -1)
+				for _, match := range matches {
+					if len(match) == 4 && match[2] < match[3] && match[3] <= len(line) {
+						linkText := line[match[2]:match[3]]
+						rendered = strings.Replace(rendered, "[["+linkText+"]]", wikiLinkStyle.Render("‣ "+linkText), 1)
+					}
 				}
 			}
 			// Links [text](url)
@@ -577,6 +607,82 @@ func renderMarkdown(text string) string {
 	}
 
 	return b.String()
+}
+
+// findNoteByTitle busca uma nota pelo título
+func (m *model) findNoteByTitle(title string) *Note {
+	// Recarrega notas do disco para ter certeza
+	m.notes = loadNotes(m.currentDir)
+	for i := range m.notes {
+		if m.notes[i].Title == title {
+			return &m.notes[i]
+		}
+	}
+	return nil
+}
+
+// pushHistory adiciona uma nota ao histórico
+func (m *model) pushHistory(title string) {
+	if title == "" {
+		return
+	}
+	// Protege contra índices inválidos
+	if m.historyPos < 0 {
+		m.historyPos = 0
+		m.history = nil
+	}
+	// Remove o que está à frente da posição atual se houver
+	if m.historyPos+1 <= len(m.history) {
+		m.history = m.history[:m.historyPos+1]
+	}
+	// Não adiciona duplicatas consecutivas
+	if len(m.history) == 0 || m.history[len(m.history)-1] != title {
+		m.history = append(m.history, title)
+	}
+	m.historyPos = len(m.history) - 1
+}
+
+// goBack volta no histórico
+func (m *model) goBack() bool {
+	if m.historyPos > 0 && m.historyPos < len(m.history) {
+		m.historyPos--
+		title := m.history[m.historyPos]
+		if note := m.findNoteByTitle(title); note != nil {
+			m.currentNote = note
+			m.editor.SetValue(note.Body)
+			m.titleInput.SetValue(note.Title)
+			return true
+		}
+	}
+	return false
+}
+
+// goForward avança no histórico
+func (m *model) goForward() bool {
+	if m.historyPos < len(m.history)-1 && m.historyPos >= 0 && len(m.history) > 0 {
+		m.historyPos++
+		title := m.history[m.historyPos]
+		if note := m.findNoteByTitle(title); note != nil {
+			m.currentNote = note
+			m.editor.SetValue(note.Body)
+			m.titleInput.SetValue(note.Title)
+			return true
+		}
+	}
+	return false
+}
+
+// extractLinks extrai todos os títulos das notas linkadas no texto
+func extractLinks(text string) []string {
+	var links []string
+	re := regexp.MustCompile(`\[\[([^\]]+)\]\]`)
+	matches := re.FindAllStringSubmatch(text, -1)
+	for _, m := range matches {
+		if len(m) > 1 {
+			links = append(links, m[1])
+		}
+	}
+	return links
 }
 
 func main() {
