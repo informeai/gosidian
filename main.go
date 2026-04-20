@@ -3,8 +3,10 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -31,8 +33,11 @@ type model struct {
 	showEditor bool
 	isNewNote  bool
 	isRenaming bool
+	showLinks  bool
+	linkIndex  int
 	editor     textarea.Model
 	titleInput textinput.Model
+	linkList   list.Model
 	currentDir string
 	width      int
 	height     int
@@ -40,7 +45,7 @@ type model struct {
 
 func initialModel() model {
 	home := os.Getenv("HOME")
-	notesDir := filepath.Join(home, "gosidian")
+	notesDir := filepath.Join(home, ".gosidian")
 
 	// Cria diretório de notas se não existir
 	os.MkdirAll(notesDir, 0755)
@@ -55,14 +60,22 @@ func initialModel() model {
 	ti.Placeholder = "Nome da nota..."
 	ti.Focus()
 
+	// Inicializa lista de autocomplete para links
+	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(true)
+
 	return model{
 		notes:      notes,
 		cursor:     0,
 		showEditor: false,
 		isNewNote:  false,
 		isRenaming: false,
+		showLinks:  false,
+		linkIndex:  0,
 		editor:     ta,
 		titleInput: ti,
+		linkList:   l,
 		currentDir: notesDir,
 	}
 }
@@ -119,6 +132,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Se estiver mostrando links, redireciona para a lista
+	if m.showLinks {
+		return m.updateLinkListInput(msg)
+	}
+
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
 		var cmd tea.Cmd
@@ -134,6 +152,7 @@ func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "esc":
 		m.showEditor = false
 		m.isRenaming = false
+		m.showLinks = false
 		return m, nil
 
 	case "ctrl+r":
@@ -145,10 +164,24 @@ func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case "ctrl+l":
+		// Ativa/desativa autocomplete de links
+		m.showLinks = !m.showLinks
+		if m.showLinks {
+			m.updateLinkList("")
+		}
+		return m, nil
+
+	case "enter":
+		// Insere nova linha
+		m.editor, _ = m.editor.Update(msg)
+		return m, nil
+
 	case "ctrl+s":
 		m.saveCurrentNote()
 		m.showEditor = false
 		m.isRenaming = false
+		m.showLinks = false
 		return m, nil
 	}
 
@@ -293,9 +326,130 @@ func (m model) viewEditor() string {
 	b.WriteString(m.editor.View())
 
 	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("Ctrl+S = salvar | Ctrl+R = renomear | Esc = voltar"))
+	b.WriteString(dimStyle.Render("Ctrl+S = salvar | Ctrl+R = renomear | Ctrl+L = link | Esc = voltar"))
+
+	// Mostra popup de autocomplete se ativo
+	if m.showLinks {
+		b.WriteString("\n\n")
+		b.WriteString(dimStyle.Render("─ link para nota ─"))
+		b.WriteString("\n")
+		b.WriteString(m.linkList.View())
+	}
 
 	return b.String()
+}
+
+// linkItem implementa list.Item para autocomplete de links
+type linkItem struct {
+	title string
+}
+
+func (i linkItem) FilterValue() string { return i.title }
+func (i linkItem) Title() string       { return i.title }
+func (i linkItem) Description() string { return "" }
+
+// findLinks encontra todos os links [[...]] no texto
+func findLinks(text string) []string {
+	var links []string
+	re := regexp.MustCompile(`\[\[([^\]]+)\]\]`)
+	matches := re.FindAllStringSubmatch(text, -1)
+	for _, m := range matches {
+		if len(m) > 1 {
+			links = append(links, m[1])
+		}
+	}
+	return links
+}
+
+// extractPartialLink extrai o texto após [[ que está sendo digitado
+func extractPartialLink(text string) string {
+	//Procura o último [[ que não tem ]]
+	lastOpen := strings.LastIndex(text, "[[")
+	if lastOpen == -1 {
+		return ""
+	}
+	// Verifica se tem ]] depois
+	resto := text[lastOpen+2:]
+	if strings.Contains(resto, "]]") {
+		return ""
+	}
+	return resto
+}
+
+// updateLinkList atualiza a lista de autocomplete com notas existentes
+func (m *model) updateLinkList(filter string) {
+	var items []list.Item
+	for _, note := range m.notes {
+		if filter == "" || strings.Contains(strings.ToLower(note.Title), strings.ToLower(filter)) {
+			items = append(items, linkItem{title: note.Title})
+		}
+	}
+	m.linkList = list.New(items, list.NewDefaultDelegate(), m.width-4, 5)
+	m.linkList.SetShowStatusBar(false)
+	m.linkList.SetFilteringEnabled(true)
+	m.linkIndex = 0
+}
+
+// updateLinkListInput gerencia input quando autocomplete está ativo
+func (m model) updateLinkListInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		var cmd tea.Cmd
+		m.linkList, cmd = m.linkList.Update(msg)
+		return m, cmd
+	}
+
+	switch keyMsg.String() {
+	case "enter":
+		// Insere o link selecionado
+		if item := m.linkList.SelectedItem(); item != nil {
+			li := item.(linkItem)
+			m.insertLink(li.title)
+		}
+		m.showLinks = false
+		m.editor.Focus()
+		return m, nil
+
+	case "tab":
+		// Próxima opção
+		m.linkList.CursorDown()
+		return m, nil
+
+	case "shift+tab":
+		// Opção anterior
+		m.linkList.CursorUp()
+		return m, nil
+
+	case "esc", "ctrl+l":
+		m.showLinks = false
+		m.editor.Focus()
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.linkList, cmd = m.linkList.Update(msg)
+	return m, cmd
+}
+
+// insertLink insere o link selecionado no editor
+func (m *model) insertLink(selectedTitle string) {
+	text := m.editor.Value()
+	partial := extractPartialLink(text)
+
+	if partial != "" {
+		// Substitui o texto parcial pelo link completo
+		start := strings.LastIndex(text, "[[")
+		if start != -1 {
+			newText := text[:start] + "[[" + selectedTitle + "]]" + text[start+len(partial)+2:]
+			m.editor.SetValue(newText)
+		}
+	} else {
+		// Insere novo link se não há parcial
+		newText := text + "[[" + selectedTitle + "]]"
+		m.editor.SetValue(newText)
+	}
+	m.showLinks = false
+	m.editor.Focus()
 }
 
 func main() {
