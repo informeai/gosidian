@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -28,19 +29,24 @@ type Note struct {
 }
 
 type model struct {
-	notes       []Note
-	cursor      int
-	showEditor  bool
-	isNewNote   bool
-	isRenaming  bool
-	isViewing   bool // Modo visualização (renderizado)
-	isEditing   bool // Modo edição
+	notes        []Note
+	cursor       int
+	showEditor   bool
+	isNewNote    bool
+	isRenaming   bool
+	isViewing    bool   // Modo visualização (renderizado)
+	isEditing   bool   // Modo edição
 	showLinks   bool
 	linkIndex   int
+
+	// Links da nota atual no modo visualização
+	currentLinks []string
+	currentLinkIndex int
+
 	editor      textarea.Model
 	titleInput  textinput.Model
-	linkList    list.Model
-	currentDir  string
+	linkList   list.Model
+	currentDir string
 	currentNote *Note
 
 	// Histórico de navegação
@@ -161,12 +167,29 @@ func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch keyMsg.String() {
 		case "enter":
-			// Navega para nota linkada
-			links := extractLinks(m.editor.Value())
-			if len(links) > 0 {
-				if note := m.findNoteByTitle(links[0]); note != nil {
+			// Navega para o link selecionado
+			if len(m.currentLinks) > 0 && m.currentLinkIndex < len(m.currentLinks) {
+				linkTitle := m.currentLinks[m.currentLinkIndex]
+				if note := m.findNoteByTitle(linkTitle); note != nil {
 					m.openNote(*note)
 					return m, nil
+				}
+			}
+			return m, nil
+
+		case "tab":
+			// Próximo link
+			if len(m.currentLinks) > 0 {
+				m.currentLinkIndex = (m.currentLinkIndex + 1) % len(m.currentLinks)
+			}
+			return m, nil
+
+		case "shift+tab":
+			// Link anterior
+			if len(m.currentLinks) > 0 {
+				m.currentLinkIndex--
+				if m.currentLinkIndex < 0 {
+					m.currentLinkIndex = len(m.currentLinks) - 1
 				}
 			}
 			return m, nil
@@ -311,6 +334,9 @@ func (m *model) openNote(note Note) {
 	m.currentNote = &note
 	m.editor.SetValue(note.Body)
 	m.titleInput.SetValue(note.Title)
+	// Extrai os links da nota
+	m.currentLinks = extractLinks(note.Body)
+	m.currentLinkIndex = 0
 	// Adiciona ao histórico
 	m.pushHistory(note.Title)
 }
@@ -395,7 +421,13 @@ func (m model) viewEditor() string {
 		b.WriteString(titleStyle.Render("👁 "+m.titleInput.Value()) + "\n")
 		b.WriteString(dimStyle.Render("─────────────────────────") + "\n")
 		b.WriteString(renderMarkdown(m.editor.Value()))
-		b.WriteString("\n" + dimStyle.Render("e = editar | Enter = link | Alt+←/→ = histórico | q = sair"))
+		// Mostra link selecionado
+		if len(m.currentLinks) > 0 {
+			b.WriteString("\n")
+			b.WriteString(focusedStyle.Render("link: "+m.currentLinks[m.currentLinkIndex]))
+			b.WriteString(dimStyle.Render(" ("+fmt.Sprintf("%d/%d", m.currentLinkIndex+1, len(m.currentLinks))+")"))
+		}
+		b.WriteString("\n" + dimStyle.Render("e = editar | Enter = abrir | Tab/Shift+Tab = navegar | Alt+←/→ = histórico | q = sair"))
 	} else {
 		// Modo edição
 		b.WriteString(titleStyle.Render("📝 Editando nota") + "\n")
@@ -560,7 +592,7 @@ func renderMarkdown(text string) string {
 	boldStyle := lipgloss.NewStyle().Bold(true)
 	italicStyle := lipgloss.NewStyle().Italic(true)
 	codeStyle := lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("223"))
-	linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Underline(true)
+	externalLinkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Underline(true)
 	wikiLinkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true).Underline(true)
 	listStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
 
@@ -571,7 +603,7 @@ func renderMarkdown(text string) string {
 	boldRe := regexp.MustCompile(`\*\*(.+?)\*\*`)
 	italicRe := regexp.MustCompile(`\*(.+?)\*`)
 	codeRe := regexp.MustCompile("`([^`]+)`")
-	linkRe := regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	externalLinkRe := regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 	wikiLinkRe := regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 	listRe := regexp.MustCompile(`^[-*] (.+)$`)
 	checkRe := regexp.MustCompile(`^- \[x\] (.+)$`)
@@ -598,8 +630,20 @@ func renderMarkdown(text string) string {
 					}
 				}
 			}
-			// Links [text](url)
-			rendered = linkRe.ReplaceAllString(rendered, linkStyle.Render("$1"))
+			// Links externos [text](url) - processa manualmente
+			externalLinkMatches := externalLinkRe.FindAllStringSubmatchIndex(line, -1)
+			for _, match := range externalLinkMatches {
+				if len(match) >= 4 {
+					textStart := match[2]
+					textEnd := match[3]
+					if textStart >= 0 && textEnd <= len(rendered) && textStart < textEnd {
+						linkText := rendered[textStart:textEnd]
+						fullMatch := rendered[match[0]:match[1]]
+						replacement := externalLinkStyle.Render(linkText)
+						rendered = strings.Replace(rendered, fullMatch, replacement, 1)
+					}
+				}
+			}
 			// Código inline
 			rendered = codeRe.ReplaceAllString(rendered, codeStyle.Render("$1"))
 			// Negrito
