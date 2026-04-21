@@ -320,9 +320,22 @@ func (m model) updateSidebar(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cursor < len(m.notes)-1 {
 			m.cursor++
 		}
+
+	case "d":
+		if m.cursor < len(m.notes) && len(m.notes) > 0 {
+			m.deleteNote(m.notes[m.cursor])
+		}
 	}
 
 	return m, nil
+}
+
+func (m *model) deleteNote(note Note) {
+	os.Remove(note.Path)
+	m.notes = loadNotes(m.currentDir)
+	if m.cursor >= len(m.notes) && m.cursor > 0 {
+		m.cursor = len(m.notes) - 1
+	}
 }
 
 func (m *model) openNote(note Note) {
@@ -408,7 +421,7 @@ func (m model) viewSidebar() string {
 	}
 
 	b.WriteString(dimStyle.Render("─────────────────") + "\n")
-	b.WriteString(dimStyle.Render("n = nova | o = abrir | q = sair"))
+	b.WriteString(dimStyle.Render("n = nova | o = abrir | d = deletar | q = sair"))
 
 	return b.String()
 }
